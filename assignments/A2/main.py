@@ -104,26 +104,65 @@ def load_dataset(dataset_path="data/demos.pkl"):
 def q2_recons():
     trajectories = load_dataset()
     # TODO: Train a DMP on trajectories[0]
-    dmp = 
-    rollout = 
+    X = trajectories[0][np.newaxis,:]   # (1, n_timesteps, n_dof)
+    dt = 0.04
+    x0 = X[0, 0, :]
+    g = X[0, -1, :]
+    T = dt * np.arange(X.shape[1]).reshape(1,-1)  # (1, n_timesteps)
+    tau = T[0,-1]
+    dmp = DMP()
+    dmp.learn(X, T)
 
-    # for k in range(6):
-    #     plt.figure()
-    #     plt.plot(demo_time, demo[:, k], label='GT')
-    #     plt.plot(rollout_time, rollout[:, k], label='DMP')
-    #     plt.legend()
-    #     plt.savefig(f'results/recons_{k}.png')
+
+    rollout = dmp.rollout(dt, tau, x0, g)
+    demo = trajectories[0]
+    demo_time = np.arange(X.shape[1]) * dt
+    rollout_time = np.arange(rollout.shape[0]) * dt
+
+    for k in range(6):
+        plt.figure()
+        plt.plot(demo_time, demo[:, k], label='GT')
+        plt.plot(rollout_time, rollout[:, k], label='DMP')
+        plt.legend()
+        plt.savefig(f'results/recons_{k}.png')
 
 
 def q2_tuning():
     trajectories = load_dataset()
     
     # TODO: select the best settings for fitting the demos
-    dmp = 
-    X, T = 
-    
-    dmp.learn(X, T)
-    dmp.save(TRAINED_DMP_PATH)
+    mse = 1e6
+    best_nbasis = None
+    best_k = None
+    for nbasis in [15, 30, 45, 60, 75, 90]:
+        for k in [10, 20, 40, 80]:
+            dmp = DMP(nbasis=nbasis, K_vec=k*np.ones(6,))
+            initial_dt = 0.04
+            X, T = dmp._interpolate(trajectories, initial_dt)
+            dmp.learn(X, T)
+            # evaluate the learned dmp for fitting the demos
+            se = 0
+            for i in range(len(trajectories)):
+                demo = X[i,:,:]  # (n_steps, n_dofs)
+                demo_time = T[i,:]  # (n_steps)
+                dt = demo_time[1] - demo_time[0]
+                tau = demo_time[-1]
+                x0 = demo[0,:]  # (n_dofs)
+                g = demo[-1,:]   # (n_dofs)
+                rollout = dmp.rollout(dt, tau, x0, g)  # (n_steps * n_dofs)
+                if rollout.shape[0] != demo.shape[0]:
+                    # due to numerical issues the rollout might be longer than demo
+                    rollout = rollout[:demo.shape[0],:]
+
+                se += ((rollout - demo) ** 2).sum()
+
+            if se < mse:
+                mse = se
+                best_nbasis = nbasis
+                best_k = k
+                dmp.save(TRAINED_DMP_PATH)
+
+    print(f" MSE: {mse}\n Best nbasis: {best_nbasis}\n Best k: {best_k}")
 
 
 def main():
@@ -134,7 +173,7 @@ def main():
     test_policy(env, policy, eval_episodes=20, render_freq=1)
 
 
-q2_recons()
+# q2_recons()
 if __name__ == '__main__':
     if len(sys.argv) == 1:
         main()

@@ -59,34 +59,45 @@ class DMP(object):
         # 
         num_demos = X.shape[0]
         num_timesteps = X.shape[1]
+        num_dofs = X.shape[2]
 
         # Initial position : [num_demos, num_timesteps, num_dofs]
         x0 = np.tile(X[:, 0, :][:, None, :], (1, num_timesteps, 1))
         # Goal position : [num_demos, num_timesteps, num_dofs]
         g = np.tile(X[:, -1, :][:, None, :], (1, num_timesteps, 1))
-         # Duration of the demonstrations
-        tau = T[:, -1] 
+        # Duration of the demonstrations, (num_demos,1,1)
+        tau = T[:, -1].reshape((-1,1,1))
 
         # TODO: Compute s(t) for each step in the demonstrations
-        s = 
+        s = np.exp((-self.alpha/tau).reshape(-1,1) * T).reshape(num_demos, num_timesteps, 1)
 
         # TODO: Compute x_dot and x_ddot using numerical differentiation (np.graident)
-        x_dot = 
-        x_ddot = 
+        x_dot = np.array([]).reshape((-1, num_timesteps, num_dofs))
+        x_ddot = np.array([]).reshape((-1, num_timesteps, num_dofs))
+        for i in range(num_demos):
+            cur_x_dot = np.gradient(X[i,:,:], T[i,:], axis=0)
+            x_dot = np.vstack((x_dot,cur_x_dot[np.newaxis, :]))
+            cur_x_ddot = np.gradient(cur_x_dot, T[i,:], axis=0)
+            x_ddot = np.vstack((x_ddot, cur_x_ddot[np.newaxis, :]))
 
         # TODO: Temporal Scaling by tau.
-        v_dot = 
+        v_dot = tau * x_ddot # [num of demos, num of timesteps, num_dofs]
 
         # TODO: Compute f_target(s) based on Equation 8.
-        f_s_target = 
+        f_s_target = (tau * v_dot + np.dot(tau * x_dot, self.D)) @  np.linalg.inv(self.K) - (g-X) + (g-x0)* s
 
         # TODO: Compute psi(s). Hint: shape should be [num_demos, num_timesteps, nbasis]
-        psi = 
+        hi = np.tile(self.basis_variances.reshape((1,1,-1)), (num_demos, num_timesteps, 1))
+        ci = np.tile(self.basis_centers.reshape((1,1,-1)), (num_demos, num_timesteps, 1))
+        psi = np.exp(-hi * (s - ci)**2)
 
         # TODO: Solve a least squares problem for the weights.
         # Hint: minimize f_target(s) - f_w(s) wrt to w
         # Hint: you can use np.linalg.lstsq
-        self.weights = 
+        A = (psi * s / np.sum(psi, axis=2, keepdims=True)).reshape(-1, self.nbasis) # (n_demo * n_time) * n_basis
+        b = f_s_target.reshape(-1, num_dofs) # (n_demo * n_time) * n_dofs
+        self.weights = np.linalg.lstsq(A, b, rcond=None)[0]  # (n_basis, n_dofs)
+
 
 
     def execute(self, t, dt, tau, x0, g, x_t, xdot_t):
@@ -104,17 +115,20 @@ class DMP(object):
         s = np.exp(((-self.alpha / tau) * t))
 
         # TODO: Compute f(s). See equation 3.
-        f_s = 
+
+        psi = np.exp(-self.basis_variances * (s - self.basis_centers) ** 2)
+        f_s = (self.weights.T @ psi.reshape(-1,1)*s / np.sum(psi)).flatten() # (n_dofs)
 
         # Temporal Scaling
         v_t = tau * xdot_t
 
         # TODO: Calculate acceleration. Equation 6
-        v_dot_t = 
-
+        v_dot_t = self.K @ (g-x_t).reshape(-1,1) - tau* self.D @ xdot_t.reshape(-1,1) \
+                  - s * self.K @ (g-x0).reshape(-1,1) + self.K @ f_s.reshape(-1,1)
+        v_dot_t = v_dot_t.flatten()
         # TODO: Calculate next position and velocity
-        xdot_tp1 = 
-        x_tp1 = 
+        xdot_tp1 = xdot_t + v_dot_t / tau * dt
+        x_tp1 = x_t + v_t * dt
 
         return x_tp1, xdot_tp1
 
@@ -124,7 +138,7 @@ class DMP(object):
         x_dot = np.zeros_like(x0)
         X = [x0]
       
-        while time <= tau:
+        while time < tau:
             x, x_dot = self.execute(t=time, dt=dt, tau=tau, x0=x0, g=g, x_t=x, xdot_t=x_dot)
             time += dt
             X.append(x)

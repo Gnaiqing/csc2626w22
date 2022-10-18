@@ -35,7 +35,7 @@ class BallCatchDMPPolicy:
         x_dot = state[6:12]
         
         # TODO: Query the DMP
-        x_target, x_dot_target = 
+        x_target, x_dot_target = self.dmp.execute(time, self.dt, self.tau, self.x0, self.g, x, x_dot)
 
         self.history.append(state)
         self.plan.append(x_target)
